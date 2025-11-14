@@ -1,0 +1,16 @@
+pandas>=2.2.0
+numpy>=1.26.0
+PyPDF2>=3.0.1
+python-docx>=1.1.0
+chromadb>=0.5.0
+sentence-transformers>=2.5.0
+transformers>=4.40.0
+torch>=2.3.0
+openai>=1.10.0
+streamlit>=1.32.0
+plotly>=5.20.0
+langchain>=0.1.0
+langchain-community>=0.0.20
+faiss-cpu>=1.8.0
+tiktoken>=0.6.0
+pydantic>=2.6.0
