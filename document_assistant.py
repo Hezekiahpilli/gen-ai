@@ -317,9 +317,10 @@ class StructuredDataHandler:
                         if 'product_' in df.columns:
                             results['ranjit_products'] = ranjit_data['product_'].unique().tolist()
             
-            # Query about dispatch status
+            # Query about dispatch status - only check pharmaceutical orders
             if 'dispatch' in query_lower and 'percentage' in query_lower:
-                if 'status' in df.columns:
+                # Only check dataframes that have order data (with mktg_specialistsmanagers column)
+                if 'status' in df.columns and 'mktg_specialistsmanagers' in df.columns:
                     total = len(df)
                     not_dispatched = len(df[df['status'] != 'Dispatched'])
                     percentage = (not_dispatched / total) * 100
@@ -327,19 +328,36 @@ class StructuredDataHandler:
                     results['not_dispatched_count'] = not_dispatched
                     results['total_orders'] = total
             
-            # Query about recoil kits
-            if 'recoil kit' in query_lower:
-                if 'product_' in df.columns:
+            # Query about recoil kits - check both category and product name
+            if 'recoil kit' in query_lower or 'recoil' in query_lower:
+                # Check if it's supply chain data with category column
+                if 'category' in df.columns:
+                    recoil_data = df[df['category'].str.contains('Recoil', case=False, na=False)]
+                    if not recoil_data.empty and 'product_name' in df.columns:
+                        results['recoil_products'] = recoil_data['product_name'].unique().tolist()
+                        results['recoil_count'] = len(recoil_data)
+                # Check pharmaceuticals with product_ column
+                elif 'product_' in df.columns:
                     recoil_data = df[df['product_'].str.contains('recoil', case=False, na=False)]
                     if not recoil_data.empty:
                         results['recoil_products'] = recoil_data['product_'].unique().tolist()
                         results['recoil_count'] = len(recoil_data)
             
-            # Query about Glock
+            # Query about Glock - check both product_name and product_ columns
             if 'glock' in query_lower:
-                if 'product_' in df.columns:
-                    # Handle both "Glock 17" and "Glock - 17" formats
-                    glock_pattern = r'glock[\s\-]*17'
+                glock_pattern = r'glock[\s\-]*17'
+                # Check supply chain data with product_name column
+                if 'product_name' in df.columns:
+                    glock_data = df[df['product_name'].str.contains(glock_pattern, case=False, regex=True, na=False)]
+                    if not glock_data.empty:
+                        if 'planned_wo_release_date' in df.columns:
+                            results['glock_wo_release_dates'] = glock_data['planned_wo_release_date'].dropna().unique().tolist()
+                        if 'product_name' in df.columns:
+                            results['glock_products'] = glock_data['product_name'].unique().tolist()
+                        if 'status' in df.columns:
+                            results['glock_status'] = glock_data['status'].unique().tolist()
+                # Check pharmaceuticals with product_ column
+                elif 'product_' in df.columns:
                     glock_data = df[df['product_'].str.contains(glock_pattern, case=False, regex=True, na=False)]
                     if not glock_data.empty:
                         if 'wo_release_date_planned' in df.columns:
@@ -462,14 +480,19 @@ class ConversationalRAG:
                     response['answer'] += f"- {product}\n"
                 response['data'] = structured_results
         
-        elif 'glock' in query_lower and ('wo release' in query_lower or 'work order' in query_lower):
+        elif 'glock' in query_lower and ('wo release' in query_lower or 'work order' in query_lower or 'release date' in query_lower or 'planned' in query_lower):
             if 'glock_wo_release_dates' in structured_results:
                 dates = structured_results['glock_wo_release_dates']
                 products = structured_results.get('glock_products', [])
-                if products:
-                    response['answer'] = f"For Glock products ({', '.join(products)}), the planned WO release dates are: {', '.join(dates)}"
-                else:
-                    response['answer'] = f"Planned WO release dates for Glock products: {', '.join(dates)}"
+                status_list = structured_results.get('glock_status', [])
+                
+                answer_parts = []
+                for i, product in enumerate(products):
+                    date = dates[i] if i < len(dates) else dates[0]
+                    status = status_list[i] if i < len(status_list) else 'N/A'
+                    answer_parts.append(f"{product}: Planned WO release date is {date}, Status: {status}")
+                
+                response['answer'] = ". ".join(answer_parts)
                 response['data'] = structured_results
         
         elif 'gst' in query_lower or 'insurance' in query_lower:
@@ -488,7 +511,7 @@ class ConversationalRAG:
                     matches = re.findall(pattern, context, re.IGNORECASE)
                     if matches:
                         for match in matches:
-                            answer_parts.append(f"GST/Tax amount: ₹{match}")
+                            answer_parts.append(f"GST/Tax amount: Rs.{match}")
                         break
                 
                 # Look for insurance expiry dates (multiple patterns)
@@ -513,7 +536,7 @@ class ConversationalRAG:
                     matches = re.findall(pattern, context, re.IGNORECASE)
                     if matches:
                         for match in matches:
-                            answer_parts.append(f"Premium amount: ₹{match}")
+                            answer_parts.append(f"Premium amount: Rs.{match}")
                         break
                 
                 # If specific patterns found, use them
