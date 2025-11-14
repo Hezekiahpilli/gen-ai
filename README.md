@@ -98,6 +98,21 @@ sudo apt-get install -y poppler-utils python3-lxml
 # If you encounter issues, ensure Visual C++ redistributables are installed
 ```
 
+## 📊 Sample Data
+
+The repository includes sample data files in the `Gen AI/Source/` directory for testing:
+
+- **pharmaceuticals.csv** - Sample pharmaceutical orders (10 orders from 4 managers)
+- **supplychain.csv** - Sample supply chain data (10 products including Recoil Kits)
+- **README.md** - Instructions for adding your own documents
+
+### Adding Your Own Documents
+
+To use with your own data, simply add your files to the `Gen AI/Source/` directory:
+- PDF files for unstructured documents
+- DOCX files for formatted documents  
+- CSV/Excel files for tabular data
+
 ## 🏃 Running the System
 
 ### Option 1: Command Line Interface

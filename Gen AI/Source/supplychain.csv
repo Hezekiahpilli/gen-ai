@@ -1,0 +1,12 @@
+product_name,category,planned_wo_release_date,actual_release_date,quantity,supplier,status
+Glock 17,Recoil Kits,2024-02-15,2024-02-15,100,Polymer Industries,Released
+Glock - 17,Recoil Kits,2024-02-15,2024-02-16,50,Polymer Industries,Released
+AR-15 Spring Kit,Recoil Kits,2024-02-20,,200,Springs Co,Planned
+M4 Carbine Kit,Recoil Kits,2024-02-25,2024-02-25,150,Defense Supply,Released
+Beretta Buffer,Recoil Kits,2024-03-01,,80,Italian Arms,Planned
+Sig Sauer P320,Firearms,2024-03-05,2024-03-06,75,Sig Manufacturing,Released
+AK-47 Parts,Recoil Kits,2024-03-10,,120,Eastern Supply,Planned
+Smith & Wesson M&P,Firearms,2024-03-15,2024-03-15,90,S&W Factory,Released
+1911 Recoil Spring,Recoil Kits,2024-03-20,,60,Classic Arms,Planned
+Desert Eagle Kit,Firearms,2024-03-25,,40,Magnum Research,Planned
+

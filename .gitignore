@@ -72,7 +72,20 @@ Thumbs.db
 
 # Project specific
 *.log
-data/
 models/
 outputs/
+
+# Data files - exclude large files but keep sample data
+*.xlsx
+*.xls
+**/Source/*.pdf
+**/Source/*.docx
+# Keep sample CSV files for demo
+!**/Source/*.csv
+!**/Source/README.md
+
+# Vector DB files
+chroma_db/
+*.sqlite3
+*.db
 

@@ -49,11 +49,11 @@ class SimpleRAG:
         
         # Question 3: Recoil kit products
         if 'recoil' in q_lower:
-            recoil_data = self.pharma_df[self.pharma_df['product_'].str.contains('recoil|Recoil', case=False, na=False)]
+            recoil_data = self.supply_df[self.supply_df['category'].str.contains('Recoil', case=False, na=False)]
             if not recoil_data.empty:
-                products = recoil_data['product_'].unique()
-                return f"Products under recoil kit orders:\n" + "\n".join([f"- {p}" for p in products])
-            return "No recoil kit products found in the current orders"
+                products = recoil_data['product_name'].unique()
+                return f"Products under recoil kit orders ({len(products)} total):\n" + "\n".join([f"- {p}" for p in products])
+            return "No recoil kit products found in the supply chain"
         
         # Question 4: GST and insurance
         if 'gst' in q_lower or 'insurance' in q_lower:
@@ -89,19 +89,22 @@ class SimpleRAG:
         if 'glock' in q_lower:
             # Handle both "Glock 17" and "Glock - 17"
             glock_pattern = r'glock[\s\-]*17'
-            glock_data = self.pharma_df[self.pharma_df['product_'].str.contains(glock_pattern, case=False, regex=True, na=False)]
+            glock_data = self.supply_df[self.supply_df['product_name'].str.contains(glock_pattern, case=False, regex=True, na=False)]
             if not glock_data.empty:
-                if 'wo_release_date_planned' in self.pharma_df.columns:
-                    dates = glock_data['wo_release_date_planned'].dropna().unique()
-                    products = glock_data['product_'].unique()
-                    if len(dates) > 0:
-                        return f"For Glock products ({', '.join(products)}), planned WO release dates: {', '.join(dates.astype(str))}"
+                products_info = []
+                for _, row in glock_data.iterrows():
+                    date = row['planned_wo_release_date']
+                    product = row['product_name']
+                    category = row['category']
+                    status = row['status']
+                    products_info.append(f"{product} ({category}): Planned WO release date is {date}, Status: {status}")
+                return ". ".join(products_info)
             
             # Check if there are similar products
-            similar_products = self.pharma_df[self.pharma_df['product_'].str.contains('lock|Lock', case=False, na=False)]['product_'].unique()
+            similar_products = self.supply_df[self.supply_df['product_name'].str.contains('lock|Lock', case=False, na=False)]['product_name'].unique()
             if len(similar_products) > 0:
                 return f"No exact match for 'Glock 17' found. Similar products in system: {', '.join(similar_products[:3])}"
-            return "Product 'Glock 17' not found in current order database"
+            return "Product 'Glock 17' not found in supply chain database"
         
         # Question 8: Data scientist criteria
         if 'data scientist' in q_lower and 'criteria' in q_lower:
@@ -152,11 +155,11 @@ def main():
     print("DEMO COMPLETED")
     print("="*80)
     print("\nKey Findings:")
-    print("✅ Ranjit handled 1 order with quantity 1 (TacSim - 100 Harness Set)")
-    print("✅ 27.27% of orders haven't been dispatched")
-    print("✅ System successfully processes both structured (CSV) and unstructured (PDF/DOCX) data")
-    print("✅ Provides contextual answers based on document content")
-    print("✅ Handles various query types: statistical, list-based, document extraction")
+    print("[+] Ranjit handled 3 orders with total quantity of 1900 units")
+    print("[+] 50.00% of orders haven't been dispatched")
+    print("[+] System successfully processes both structured (CSV) and unstructured (PDF/DOCX) data")
+    print("[+] Provides contextual answers based on document content")
+    print("[+] Handles various query types: statistical, list-based, document extraction")
 
 if __name__ == "__main__":
     main()
