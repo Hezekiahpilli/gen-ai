@@ -1,8 +1,30 @@
 # Document Assistant - Conversational RAG System
 
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Demo-green.svg)](LICENSE)
+[![GitHub](https://img.shields.io/badge/github-Hezekiahpilli%2Fgen--ai-black.svg)](https://github.com/Hezekiahpilli/gen-ai)
+
 ## 📚 Overview
 
 Document Assistant is a sophisticated Retrieval-Augmented Generation (RAG) system that enables natural language interaction with multi-format documents. It seamlessly processes both structured (CSV/Excel) and unstructured (PDF/DOCX) data, allowing users to ask questions and receive contextual, accurate answers.
+
+## ⚡ Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/Hezekiahpilli/gen-ai.git
+cd gen-ai
+
+# Create virtual environment and install dependencies
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+
+# Run the web interface
+streamlit run streamlit_app.py
+```
+
+Then open http://localhost:8501 in your browser!
 
 ## 🎯 Problem Statement Solution
 
@@ -38,30 +60,42 @@ For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## 📋 Prerequisites
 
-- Python 3.8 or higher
+- Python 3.13 or higher (tested with Python 3.13.3)
 - 4GB+ RAM recommended
 - 2GB+ free disk space
 
 ## 🔧 Installation
 
-1. **Clone the repository** (or extract the provided files):
+1. **Clone the repository**:
 ```bash
-cd /home/claude
+git clone https://github.com/Hezekiahpilli/gen-ai.git
+cd gen-ai
 ```
 
-2. **Install dependencies**:
+2. **Create a virtual environment** (recommended):
+```bash
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
+
+# Linux/Mac
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+3. **Install dependencies**:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Install additional system dependencies** (if needed):
+4. **Install additional system dependencies** (if needed):
 ```bash
-# For PDF processing
+# Linux/Mac - For PDF processing
 sudo apt-get update
-sudo apt-get install -y poppler-utils
+sudo apt-get install -y poppler-utils python3-lxml
 
-# For DOCX processing
-sudo apt-get install -y python3-lxml
+# Windows - Most packages work out of the box
+# If you encounter issues, ensure Visual C++ redistributables are installed
 ```
 
 ## 🏃 Running the System
@@ -188,22 +222,44 @@ print(f"Sources: {response['sources']}")
 
 ### Common Issues
 
-1. **Module Import Errors**
+1. **Python Version Compatibility**
+   - Ensure you're using Python 3.13 or higher
+   - The requirements.txt has been updated for Python 3.13 compatibility
+   - Older Python versions (3.8-3.12) may have compatibility issues with dependencies
    ```bash
-   pip install --upgrade -r requirements.txt
+   python --version  # Should show 3.13.x
    ```
 
-2. **PDF Processing Issues**
+2. **Module Import Errors**
    ```bash
+   # Upgrade pip, setuptools, and wheel first
+   python -m pip install --upgrade pip setuptools wheel
+   
+   # Then install requirements
+   pip install -r requirements.txt
+   ```
+
+3. **Cannot import 'setuptools.build_meta' Error**
+   ```bash
+   # This occurs when setuptools is missing in virtual environment
+   pip install --upgrade setuptools wheel
+   pip install -r requirements.txt
+   ```
+
+4. **PDF Processing Issues**
+   ```bash
+   # Linux/Mac
    sudo apt-get install poppler-utils
+   
+   # Windows - usually works without additional setup
    pip install pdfplumber  # Alternative PDF processor
    ```
 
-3. **Memory Issues**
+5. **Memory Issues**
    - Reduce chunk size in DocumentProcessor
    - Use batch processing for large datasets
 
-4. **Slow Performance**
+6. **Slow Performance**
    - Enable GPU if available
    - Reduce embedding model size
    - Implement caching
@@ -242,11 +298,15 @@ Contributions are welcome! Areas for improvement:
 
 ## 📄 License
 
-This project is provided as a demonstration solution for the given assignment.
+This project is for demonstration and educational purposes.
 
 ## 👥 Contact
 
-For questions or support regarding this implementation, please refer to the documentation or submit an issue.
+**Author**: Hezekiahpilli  
+**GitHub**: [@Hezekiahpilli](https://github.com/Hezekiahpilli)  
+**Repository**: [gen-ai](https://github.com/Hezekiahpilli/gen-ai)
+
+For questions or support, please [open an issue](https://github.com/Hezekiahpilli/gen-ai/issues) on GitHub.
 
 ---
 
