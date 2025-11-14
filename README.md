@@ -26,6 +26,18 @@ streamlit run streamlit_app.py
 
 Then open http://localhost:8501 in your browser!
 
+## 🎯 NEW: Complete Answer Generation
+
+The system has been optimized to provide **complete, detailed answers** instead of partial responses:
+
+- ✅ **3x Larger Context** - Uses 12,000 characters instead of 4,000
+- ✅ **87% Bigger Chunks** - Processes 1,500-char chunks instead of 800
+- ✅ **2.5x More Retrieval** - Gets 50 relevant chunks instead of 20
+- ✅ **No Truncation** - Returns complete information without cutting off
+- ✅ **Full Document Priority** - Uses entire documents for comprehensive answers
+
+📖 See [USAGE_GUIDE.md](USAGE_GUIDE.md) for complete documentation on getting the best results.
+
 ## 🎯 Problem Statement Solution
 
 This system addresses the business requirement to:

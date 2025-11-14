@@ -45,39 +45,81 @@ class DocumentProcessor:
         self.chunks = []
         
     def process_pdf(self, file_path: str) -> List[DocumentChunk]:
-        """Extract text from PDF files"""
+        """Extract text from PDF files with improved chunking"""
         chunks = []
         try:
             with open(file_path, 'rb') as file:
                 pdf_reader = PyPDF2.PdfReader(file)
                 full_text = ""
+                page_texts = []
                 
                 for page_num, page in enumerate(pdf_reader.pages):
                     text = page.extract_text()
+                    page_texts.append((page_num + 1, text))
                     full_text += text + "\n"
                 
-                # Split into chunks (simple approach - by paragraphs)
-                paragraphs = full_text.split('\n\n')
-                for i, para in enumerate(paragraphs):
-                    if len(para.strip()) > 50:  # Filter out very short chunks
-                        chunk = DocumentChunk(
-                            content=para.strip(),
+                # Create chunks with better strategy
+                # Strategy 1: Store full document as one chunk for comprehensive searches
+                if len(full_text.strip()) > 100:
+                    chunks.append(DocumentChunk(
+                        content=full_text.strip(),
+                        metadata={
+                            'source': file_path,
+                            'page': 'all',
+                            'filename': os.path.basename(file_path),
+                            'chunk_type': 'full_document'
+                        },
+                        chunk_id=f"{os.path.basename(file_path)}_full",
+                        source_type='pdf'
+                    ))
+                
+                # Strategy 2: Create overlapping chunks of ~1500 characters for better context
+                chunk_size = 1500
+                overlap = 300
+                start = 0
+                chunk_idx = 0
+                
+                while start < len(full_text):
+                    end = start + chunk_size
+                    chunk_text = full_text[start:end]
+                    
+                    if len(chunk_text.strip()) > 100:
+                        chunks.append(DocumentChunk(
+                            content=chunk_text.strip(),
                             metadata={
                                 'source': file_path,
-                                'page': i // 3,  # Approximate page number
-                                'filename': os.path.basename(file_path)
+                                'filename': os.path.basename(file_path),
+                                'chunk_type': 'overlap_chunk'
                             },
-                            chunk_id=f"{os.path.basename(file_path)}_chunk_{i}",
+                            chunk_id=f"{os.path.basename(file_path)}_overlap_{chunk_idx}",
                             source_type='pdf'
-                        )
-                        chunks.append(chunk)
+                        ))
+                    
+                    start = end - overlap
+                    chunk_idx += 1
+                
+                # Strategy 3: Per-page chunks for page-specific queries
+                for page_num, page_text in page_texts:
+                    if len(page_text.strip()) > 50:
+                        chunks.append(DocumentChunk(
+                            content=page_text.strip(),
+                            metadata={
+                                'source': file_path,
+                                'page': page_num,
+                                'filename': os.path.basename(file_path),
+                                'chunk_type': 'page'
+                            },
+                            chunk_id=f"{os.path.basename(file_path)}_page_{page_num}",
+                            source_type='pdf'
+                        ))
+                        
         except Exception as e:
             print(f"Error processing PDF {file_path}: {e}")
         
         return chunks
     
     def process_docx(self, file_path: str) -> List[DocumentChunk]:
-        """Extract text from DOCX files"""
+        """Extract text from DOCX files with improved chunking"""
         chunks = []
         try:
             doc = DocxDocument(file_path)
@@ -86,20 +128,50 @@ class DocumentProcessor:
             for para in doc.paragraphs:
                 full_text += para.text + "\n"
             
-            # Split into chunks
-            paragraphs = full_text.split('\n\n')
-            for i, para in enumerate(paragraphs):
-                if len(para.strip()) > 50:
-                    chunk = DocumentChunk(
-                        content=para.strip(),
+            # Extract tables from DOCX as well
+            for table in doc.tables:
+                for row in table.rows:
+                    row_data = [cell.text for cell in row.cells]
+                    full_text += " | ".join(row_data) + "\n"
+            
+            # Strategy 1: Full document chunk
+            if len(full_text.strip()) > 100:
+                chunks.append(DocumentChunk(
+                    content=full_text.strip(),
+                    metadata={
+                        'source': file_path,
+                        'filename': os.path.basename(file_path),
+                        'chunk_type': 'full_document'
+                    },
+                    chunk_id=f"{os.path.basename(file_path)}_full",
+                    source_type='docx'
+                ))
+            
+            # Strategy 2: Overlapping chunks with larger size for complete context
+            chunk_size = 1500
+            overlap = 300
+            start = 0
+            chunk_idx = 0
+            
+            while start < len(full_text):
+                end = start + chunk_size
+                chunk_text = full_text[start:end]
+                
+                if len(chunk_text.strip()) > 100:
+                    chunks.append(DocumentChunk(
+                        content=chunk_text.strip(),
                         metadata={
                             'source': file_path,
-                            'filename': os.path.basename(file_path)
+                            'filename': os.path.basename(file_path),
+                            'chunk_type': 'overlap_chunk'
                         },
-                        chunk_id=f"{os.path.basename(file_path)}_chunk_{i}",
+                        chunk_id=f"{os.path.basename(file_path)}_overlap_{chunk_idx}",
                         source_type='docx'
-                    )
-                    chunks.append(chunk)
+                    ))
+                
+                start = end - overlap
+                chunk_idx += 1
+                
         except Exception as e:
             print(f"Error processing DOCX {file_path}: {e}")
         
@@ -205,13 +277,13 @@ class VectorStore:
             ids=ids
         )
     
-    def search(self, query: str, k: int = 5) -> List[Dict]:
-        """Search for relevant documents"""
+    def search(self, query: str, k: int = 50) -> List[Dict]:
+        """Search for relevant documents - increased to 50 for comprehensive, complete results"""
         query_embedding = self.embedding_model.encode([query])
         
         results = self.collection.query(
             query_embeddings=query_embedding.tolist(),
-            n_results=k
+            n_results=min(k, self.collection.count())  # Don't exceed available documents
         )
         
         return results
@@ -336,15 +408,36 @@ class ConversationalRAG:
         # First, check structured data
         structured_results = self.structured_handler.query_data(query)
         
-        # Search vector store for relevant documents
-        search_results = self.vector_store.search(query, k=5)
+        # Search vector store for relevant documents - get MAXIMUM results for comprehensive answers
+        search_results = self.vector_store.search(query, k=30)
         
-        # Build context from search results
+        # Build comprehensive context from ALL search results
         context = ""
+        source_files = set()
+        all_contexts = []
+        
         if search_results and search_results['documents']:
             for doc, metadata in zip(search_results['documents'][0], search_results['metadatas'][0]):
-                context += f"{doc}\n"
-                response['sources'].append(metadata.get('filename', 'Unknown'))
+                all_contexts.append(doc)
+                source_files.add(metadata.get('filename', 'Unknown'))
+            
+            # Prioritize full_document chunks for comprehensive answers
+            full_docs = []
+            page_chunks = []
+            other_chunks = []
+            
+            for doc, metadata in zip(search_results['documents'][0], search_results['metadatas'][0]):
+                if metadata.get('chunk_type') == 'full_document':
+                    full_docs.append(doc)
+                elif metadata.get('chunk_type') == 'page':
+                    page_chunks.append(doc)
+                else:
+                    other_chunks.append(doc)
+            
+            # Use full documents first for complete information, then pages, then overlapping chunks
+            # Don't limit the chunks - use ALL relevant information
+            context = "\n\n---\n\n".join(full_docs + page_chunks + other_chunks)
+            response['sources'] = list(source_files)
         
         # Generate answer based on query type
         query_lower = query.lower()
@@ -380,25 +473,55 @@ class ConversationalRAG:
                 response['data'] = structured_results
         
         elif 'gst' in query_lower or 'insurance' in query_lower:
-            # Search for insurance information in context
+            # Search for insurance information in context with comprehensive extraction
             if context:
-                # Extract GST and insurance info from context using regex
-                gst_pattern = r'GST[:\s]+([₹\d,\.]+)'
-                insurance_pattern = r'(third party|TP|OD).*expire.*?(\d{2}/\d{2}/\d{4})'
-                
-                gst_match = re.search(gst_pattern, context, re.IGNORECASE)
-                insurance_match = re.search(insurance_pattern, context, re.IGNORECASE)
-                
+                # Extract ALL insurance-related information
                 answer_parts = []
-                if gst_match:
-                    answer_parts.append(f"GST charged: {gst_match.group(1)}")
-                if insurance_match:
-                    answer_parts.append(f"Third party insurance expires on: {insurance_match.group(2)}")
                 
+                # Look for GST amounts (multiple patterns)
+                gst_patterns = [
+                    r'GST[:\s]*(?:Rs\.?|₹)?\s*([\d,\.]+)',
+                    r'(?:Tax|GST)[:\s]+([₹\d,\.]+)',
+                    r'Service Tax[:\s]+([₹\d,\.]+)'
+                ]
+                for pattern in gst_patterns:
+                    matches = re.findall(pattern, context, re.IGNORECASE)
+                    if matches:
+                        for match in matches:
+                            answer_parts.append(f"GST/Tax amount: ₹{match}")
+                        break
+                
+                # Look for insurance expiry dates (multiple patterns)
+                expiry_patterns = [
+                    r'(?:Third Party|TP|third party|OD).*?(?:expire|expiry|valid till|valid until)[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+                    r'(?:expire|expiry|valid till)[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+                    r'valid.*?(?:up to|till|until)[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})'
+                ]
+                for pattern in expiry_patterns:
+                    matches = re.findall(pattern, context, re.IGNORECASE)
+                    if matches:
+                        for match in matches:
+                            answer_parts.append(f"Insurance expiry date: {match}")
+                        break
+                
+                # Extract premium amounts
+                premium_patterns = [
+                    r'Premium[:\s]*(?:Rs\.?|₹)?\s*([\d,\.]+)',
+                    r'Total Premium[:\s]*(?:Rs\.?|₹)?\s*([\d,\.]+)'
+                ]
+                for pattern in premium_patterns:
+                    matches = re.findall(pattern, context, re.IGNORECASE)
+                    if matches:
+                        for match in matches:
+                            answer_parts.append(f"Premium amount: ₹{match}")
+                        break
+                
+                # If specific patterns found, use them
                 if answer_parts:
                     response['answer'] = ". ".join(answer_parts)
                 else:
-                    response['answer'] = "Insurance and GST information found in documents. Please check the vehicle insurance document for specific details."
+                    # Fall back to comprehensive extraction
+                    response['answer'] = self._extract_from_context(query, context)
         
         elif any(word in query_lower for word in ['hiring', 'recruit', 'data scientist', 'roles']):
             if context:
@@ -419,28 +542,83 @@ class ConversationalRAG:
         return response
     
     def _extract_from_context(self, query: str, context: str) -> str:
-        """Extract answer from context using QA model or rules"""
+        """Extract comprehensive answer from context with detailed information"""
         if self.use_local_llm:
             try:
-                result = self.qa_pipeline(question=query, context=context)
+                # Use MUCH larger context for complete answers
+                result = self.qa_pipeline(question=query, context=context[:12000])
                 return result['answer']
             except:
                 pass
         
-        # Fallback to rule-based extraction
-        sentences = context.split('.')
+        # Enhanced rule-based extraction for comprehensive answers
+        query_lower = query.lower()
+        query_keywords = set([word for word in query_lower.split() if len(word) > 3])
+        
+        # Split context into sentences and paragraphs
+        paragraphs = context.split('\n\n')
+        relevant_paragraphs = []
+        scores = []
+        
+        # Score each paragraph by relevance
+        for para in paragraphs:
+            if len(para.strip()) < 20:
+                continue
+                
+            para_lower = para.lower()
+            para_words = set([word for word in para_lower.split() if len(word) > 3])
+            
+            # Calculate relevance score
+            keyword_matches = len(query_keywords.intersection(para_words))
+            
+            # Boost score for exact phrase matches
+            if any(keyword in para_lower for keyword in query_keywords):
+                keyword_matches += 2
+            
+            if keyword_matches > 0:
+                scores.append((keyword_matches, para))
+        
+        # Sort by relevance and take MORE paragraphs for complete answers
+        scores.sort(reverse=True, key=lambda x: x[0])
+        
+        # Build comprehensive answer from ALL relevant paragraphs
+        answer_parts = []
+        seen_content = set()
+        
+        # Take up to 20 most relevant paragraphs instead of 8 for complete answers
+        for score, para in scores[:20]:
+            para_clean = para.strip()
+            # Avoid duplicates
+            if para_clean not in seen_content and len(para_clean) > 30:
+                answer_parts.append(para_clean)
+                seen_content.add(para_clean)
+        
+        if answer_parts:
+            # Create a comprehensive answer - NO TRUNCATION for complete information
+            answer = "\n\n".join(answer_parts)
+            return answer
+        
+        # If no good paragraph matches, try sentence-level extraction
+        sentences = re.split(r'[.!?]+', context)
         relevant_sentences = []
-        query_words = set(query.lower().split())
         
         for sentence in sentences:
-            sentence_words = set(sentence.lower().split())
-            if len(query_words.intersection(sentence_words)) > 2:
-                relevant_sentences.append(sentence.strip())
+            sentence_clean = sentence.strip()
+            if len(sentence_clean) < 20:
+                continue
+            
+            sentence_lower = sentence_clean.lower()
+            if any(keyword in sentence_lower for keyword in query_keywords):
+                relevant_sentences.append(sentence_clean)
         
         if relevant_sentences:
-            return ". ".join(relevant_sentences[:3]) + "."
+            # Return ALL relevant sentences for complete answer (no limit)
+            answer = ". ".join(relevant_sentences)
+            if not answer.endswith('.'):
+                answer += "."
+            return answer
         
-        return "Information found in documents but requires more specific extraction."
+        return f"Based on the documents, I found relevant information but it may not directly answer your specific question. Please try rephrasing or asking more specifically about: {', '.join(list(query_keywords)[:5])}"
 
 def main():
     """Main function to run the conversational document assistant"""
