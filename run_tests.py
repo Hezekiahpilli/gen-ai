@@ -6,10 +6,17 @@ Runs all test questions and generates a comprehensive report
 import sys
 import os
 import json
+import io
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import time
+
+# Ensure UTF-8 output so emojis/logs don't crash on Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+else:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

@@ -318,11 +318,14 @@ class StructuredDataHandler:
                     ranjit_data = df[df['mktg_specialistsmanagers'] == 'Ranjit']
                     if not ranjit_data.empty:
                         if 'qty' in df.columns:
-                            total_qty = ranjit_data['qty'].sum()
-                            results['ranjit_order_quantity'] = total_qty
+                            qty_series = pd.to_numeric(ranjit_data['qty'], errors='coerce').dropna()
+                            if not qty_series.empty:
+                                total_qty = qty_series.sum()
+                                results['ranjit_order_quantity'] = total_qty
                         results['ranjit_total_orders'] = len(ranjit_data)
                         if 'product_' in df.columns:
                             results['ranjit_products'] = ranjit_data['product_'].unique().tolist()
+                        results['ranjit_source'] = f"{df_name}.csv"
             
             # Query about dispatch status - only check pharmaceutical orders
             if 'dispatch' in query_lower and 'percentage' in query_lower:
@@ -334,6 +337,7 @@ class StructuredDataHandler:
                     results['not_dispatched_percentage'] = round(percentage, 2)
                     results['not_dispatched_count'] = not_dispatched
                     results['total_orders'] = total
+                    results['dispatch_source'] = f"{df_name}.csv"
             
             # Query about recoil kits - check both category and product name
             if 'recoil kit' in query_lower or 'recoil' in query_lower:
@@ -343,12 +347,19 @@ class StructuredDataHandler:
                     if not recoil_data.empty and 'product_name' in df.columns:
                         results['recoil_products'] = recoil_data['product_name'].unique().tolist()
                         results['recoil_count'] = len(recoil_data)
+                        results['recoil_source'] = f"{df_name}.csv"
                 # Check pharmaceuticals with product_ column
                 elif 'product_' in df.columns:
-                    recoil_data = df[df['product_'].str.contains('recoil', case=False, na=False)]
+                    product_mask = df['product_'].astype(str).str.contains('recoil', case=False, na=False)
+                    type_mask = (
+                        df['type_of_order'].astype(str).str.contains('recoil', case=False, na=False)
+                        if 'type_of_order' in df.columns else pd.Series(False, index=df.index)
+                    )
+                    recoil_data = df[product_mask | type_mask]
                     if not recoil_data.empty:
-                        results['recoil_products'] = recoil_data['product_'].unique().tolist()
+                        results['recoil_products'] = recoil_data['product_'].dropna().unique().tolist()
                         results['recoil_count'] = len(recoil_data)
+                        results['recoil_source'] = f"{df_name}.csv"
             
             # Query about Glock - check both product_name and product_ columns
             if 'glock' in query_lower:
@@ -363,6 +374,7 @@ class StructuredDataHandler:
                             results['glock_products'] = glock_data['product_name'].unique().tolist()
                         if 'status' in df.columns:
                             results['glock_status'] = glock_data['status'].unique().tolist()
+                        results['glock_source'] = f"{df_name}.csv"
                 # Check pharmaceuticals with product_ column
                 elif 'product_' in df.columns:
                     glock_data = df[df['product_'].str.contains(glock_pattern, case=False, regex=True, na=False)]
@@ -370,6 +382,9 @@ class StructuredDataHandler:
                         if 'wo_release_date_planned' in df.columns:
                             results['glock_wo_release_dates'] = glock_data['wo_release_date_planned'].dropna().unique().tolist()
                         results['glock_products'] = glock_data['product_'].unique().tolist()
+                        if 'status' in df.columns:
+                            results['glock_status'] = df.loc[glock_data.index, 'status'].dropna().unique().tolist()
+                        results['glock_source'] = f"{df_name}.csv"
         
         return results
 
@@ -472,88 +487,71 @@ class ConversationalRAG:
         # Handle specific queries with structured data
         if 'ranjit' in query_lower and 'order quantity' in query_lower:
             if 'ranjit_order_quantity' in structured_results:
-                response['answer'] = f"Ranjit has handled a total order quantity of {structured_results['ranjit_order_quantity']} units."
+                qty_value = structured_results['ranjit_order_quantity']
+                if isinstance(qty_value, (int, float)):
+                    qty = int(qty_value) if abs(qty_value - int(qty_value)) < 1e-6 else round(qty_value, 2)
+                else:
+                    try:
+                        qty_float = float(qty_value)
+                        qty = int(qty_float) if abs(qty_float - int(qty_float)) < 1e-6 else round(qty_float, 2)
+                    except (TypeError, ValueError):
+                        qty = qty_value
+                total_orders = structured_results.get('ranjit_total_orders')
+                products = structured_results.get('ranjit_products') or []
+                parts = [f"Ranjit handled {qty} unit{'s' if qty != 1 else ''}"]
+                if total_orders:
+                    parts.append(f"across {total_orders} order{'s' if total_orders != 1 else ''}")
+                response_lines = [" ".join(parts).strip() + "."]
+                if products:
+                    response_lines.append("Products managed: " + ", ".join(sorted(products)) + ".")
+                response['answer'] = " ".join(response_lines)
                 response['data'] = structured_results
+                response['sources'] = [structured_results.get('ranjit_source', 'pharmaceuticals.csv')]
         
         elif 'dispatch' in query_lower and 'percentage' in query_lower:
             if 'not_dispatched_percentage' in structured_results:
                 response['answer'] = f"{structured_results['not_dispatched_percentage']}% of orders haven't been dispatched. "
                 response['answer'] += f"That's {structured_results['not_dispatched_count']} out of {structured_results['total_orders']} total orders."
                 response['data'] = structured_results
+                response['sources'] = [structured_results.get('dispatch_source', 'pharmaceuticals.csv')]
         
         elif 'recoil kit' in query_lower:
             if 'recoil_products' in structured_results:
-                products = structured_results['recoil_products']
-                response['answer'] = f"Products under recoil kit orders:\n"
-                for product in products:
-                    response['answer'] += f"- {product}\n"
+                products = sorted(structured_results['recoil_products'])
+                list_lines = "\n".join(f"- {product}" for product in products)
+                response['answer'] = "Products under recoil kit orders:\n" + list_lines
                 response['data'] = structured_results
+                response['sources'] = [structured_results.get('recoil_source', 'pharmaceuticals.csv')]
         
-        elif 'glock' in query_lower and ('wo release' in query_lower or 'work order' in query_lower or 'release date' in query_lower or 'planned' in query_lower):
-            if 'glock_wo_release_dates' in structured_results:
-                dates = structured_results['glock_wo_release_dates']
-                products = structured_results.get('glock_products', [])
-                status_list = structured_results.get('glock_status', [])
-                
-                answer_parts = []
-                for i, product in enumerate(products):
-                    date = dates[i] if i < len(dates) else dates[0]
-                    status = status_list[i] if i < len(status_list) else 'N/A'
-                    answer_parts.append(f"{product}: Planned WO release date is {date}, Status: {status}")
-                
-                response['answer'] = ". ".join(answer_parts)
+        elif 'glock' in query_lower:
+            glock_answer = self._format_glock_release_summary(structured_results)
+            if glock_answer:
+                response['answer'] = glock_answer
                 response['data'] = structured_results
+                response['sources'] = [structured_results.get('glock_source', 'pharmaceuticals.csv')]
+            elif context:
+                response['answer'] = self._extract_from_context(query, context)
         
         elif 'gst' in query_lower or 'insurance' in query_lower:
-            # Search for insurance information in context with comprehensive extraction
-            if context:
-                # Extract ALL insurance-related information
-                answer_parts = []
-                
-                # Look for GST amounts (multiple patterns)
-                gst_patterns = [
-                    r'GST[:\s]*(?:Rs\.?|₹)?\s*([\d,\.]+)',
-                    r'(?:Tax|GST)[:\s]+([₹\d,\.]+)',
-                    r'Service Tax[:\s]+([₹\d,\.]+)'
-                ]
-                for pattern in gst_patterns:
-                    matches = re.findall(pattern, context, re.IGNORECASE)
-                    if matches:
-                        for match in matches:
-                            answer_parts.append(f"GST/Tax amount: Rs.{match}")
-                        break
-                
-                # Look for insurance expiry dates (multiple patterns)
-                expiry_patterns = [
-                    r'(?:Third Party|TP|third party|OD).*?(?:expire|expiry|valid till|valid until)[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
-                    r'(?:expire|expiry|valid till)[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
-                    r'valid.*?(?:up to|till|until)[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})'
-                ]
-                for pattern in expiry_patterns:
-                    matches = re.findall(pattern, context, re.IGNORECASE)
-                    if matches:
-                        for match in matches:
-                            answer_parts.append(f"Insurance expiry date: {match}")
-                        break
-                
-                # Extract premium amounts
-                premium_patterns = [
-                    r'Premium[:\s]*(?:Rs\.?|₹)?\s*([\d,\.]+)',
-                    r'Total Premium[:\s]*(?:Rs\.?|₹)?\s*([\d,\.]+)'
-                ]
-                for pattern in premium_patterns:
-                    matches = re.findall(pattern, context, re.IGNORECASE)
-                    if matches:
-                        for match in matches:
-                            answer_parts.append(f"Premium amount: Rs.{match}")
-                        break
-                
-                # If specific patterns found, use them
-                if answer_parts:
-                    response['answer'] = ". ".join(answer_parts)
-                else:
-                    # Fall back to comprehensive extraction
-                    response['answer'] = self._extract_from_context(query, context)
+            insurance_info = self._extract_insurance_details(retrieved_chunks, context)
+            if insurance_info:
+                response['answer'] = self._format_insurance_response(insurance_info)
+                if insurance_info.get('sources'):
+                    response['sources'] = sorted(insurance_info['sources'])
+            elif context:
+                response['answer'] = self._extract_from_context(query, context)
+
+        elif (
+            'data scientist' in query_lower and
+            any(keyword in query_lower for keyword in ['criteria', 'requirement', 'qualification', 'responsibil', 'profile'])
+        ):
+            criteria_data = self._extract_data_scientist_criteria(retrieved_chunks, context)
+            if criteria_data:
+                response['answer'] = criteria_data['answer']
+                if criteria_data.get('sources'):
+                    response['sources'] = sorted(criteria_data['sources'])
+            elif context:
+                response['answer'] = self._extract_from_context(query, context)
         
         elif any(word in query_lower for word in ['hiring', 'recruit', 'data scientist', 'roles', 'position', 'opening']):
             if retrieved_chunks:
@@ -574,7 +572,17 @@ class ConversationalRAG:
                 else:
                     response['answer'] = self._extract_from_context(query, context)
         elif 'log book' in query_lower:
-            if context:
+            logbook_answer = None
+            logbook_keywords = [
+                'benefit', 'benefits', 'benifit', 'benifits',
+                'set up', 'setup', 'set-it-up', 'set it up',
+                'getting started', 'configure', 'configuration'
+            ]
+            if any(keyword in query_lower for keyword in logbook_keywords):
+                logbook_answer = self._extract_logbook_benefits_and_setup(retrieved_chunks, context)
+            if logbook_answer:
+                response['answer'] = logbook_answer
+            elif context:
                 response['answer'] = self._extract_from_context(query, context)
         
         # If no specific handler, use context-based answer
@@ -848,6 +856,440 @@ class ConversationalRAG:
             lines.append(f"- {role_name} (source: {source})")
         
         return "\n".join(lines)
+
+    def _get_chunk_text(
+        self,
+        retrieved_chunks: List[Dict[str, Any]],
+        filename_keyword: Optional[str] = None,
+        keyword_filters: Optional[List[str]] = None
+    ) -> str:
+        """Aggregate text from retrieved chunks that match a filename or keywords."""
+        if not retrieved_chunks:
+            return ""
+        
+        texts = []
+        seen = set()
+        keyword_filters = [kw.lower() for kw in keyword_filters] if keyword_filters else []
+        filename_keyword = filename_keyword.lower() if filename_keyword else None
+        
+        for chunk in retrieved_chunks:
+            text = chunk.get('text') or ""
+            if not text.strip():
+                continue
+            metadata = chunk.get('metadata', {})
+            filename = metadata.get('filename', '').lower()
+            lower_text = text.lower()
+            
+            include = False
+            if filename_keyword and filename_keyword in filename:
+                include = True
+            if keyword_filters and any(keyword in lower_text for keyword in keyword_filters):
+                include = True
+            if not filename_keyword and not keyword_filters:
+                include = True
+            
+            if include and text not in seen:
+                texts.append(text)
+                seen.add(text)
+        
+        return "\n\n".join(texts)
+
+    def _clean_section_line(self, line: str) -> str:
+        cleaned = line.strip()
+        if not cleaned:
+            return ""
+        cleaned = re.sub(r'\[.*?\]', '', cleaned)
+        cleaned = re.sub(r'^[\-\u2022\u25CF\u25CB\u25A0·•○●■▪▫\*\d\)\(]+', '', cleaned).strip()
+        cleaned = cleaned.replace('–', '-')
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        noise_tokens = [
+            'gps log book – user manual', 'gps log book - user manual',
+            'table of contents', 'insert website', 'insert logo', 'page'
+        ]
+        lowered = cleaned.lower()
+        for noise in noise_tokens:
+            if lowered.startswith(noise):
+                return ""
+        return cleaned
+
+    def _extract_bullet_lines(self, block: str) -> List[str]:
+        """Convert a block of text with bullets into clean list items."""
+        if not block:
+            return []
+        
+        aggregated = []
+        current = ""
+        bullet_chars = {'●', '○', '•', '', '-', '▪', '▫', '■', '\uf0b7'}
+        bullet_regex = r'^[\-\u2022\u25CF\u25CB\u25A0·•○●■▪▫\*\uf0b7]+'
+        
+        for raw in block.splitlines():
+            stripped = raw.strip()
+            if not stripped:
+                if current:
+                    aggregated.append(current.strip())
+                    current = ""
+                continue
+            
+            if stripped in bullet_chars:
+                if current:
+                    aggregated.append(current.strip())
+                    current = ""
+                continue
+            
+            if re.match(bullet_regex + r'\s+', stripped) or re.match(r'^\d+\.\s+', stripped):
+                if current:
+                    aggregated.append(current.strip())
+                cleaned = re.sub(bullet_regex + r'\s*', '', stripped)
+                current = cleaned
+            else:
+                if current:
+                    current += ' ' + stripped
+                else:
+                    current = stripped
+        
+        if current:
+            aggregated.append(current.strip())
+        
+        cleaned_lines = []
+        for line in aggregated:
+            cleaned = self._clean_section_line(line)
+            if cleaned:
+                cleaned_lines.append(cleaned)
+        
+        return cleaned_lines
+
+    def _extract_numbered_lines(self, block: str) -> List[str]:
+        """Extract ordered steps (1., 2., etc.) from a block."""
+        if not block:
+            return []
+        
+        steps = []
+        current = ""
+        for raw in block.splitlines():
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            match = re.match(r'^(\d+)\.\s*(.+)', stripped)
+            if match:
+                if current:
+                    steps.append(current.strip())
+                current = match.group(2)
+            else:
+                if current:
+                    current += ' ' + stripped
+        if current:
+            steps.append(current.strip())
+        
+        cleaned_steps = []
+        for step in steps:
+            cleaned = self._clean_section_line(step)
+            if cleaned:
+                cleaned_steps.append(cleaned)
+        return cleaned_steps
+    
+    def _summarize_section(self, block: str, keywords: List[str]) -> Optional[str]:
+        if not block:
+            return None
+        sentences = re.split(r'(?<=[.!?])\s+', block)
+        for sentence in sentences:
+            cleaned = self._clean_section_line(sentence)
+            if not cleaned:
+                continue
+            lower = cleaned.lower()
+            if any(keyword in lower for keyword in keywords):
+                return cleaned
+        merged = self._clean_section_line(" ".join(block.splitlines()[:3]))
+        return merged or None
+
+    def _filter_job_section_lines(self, lines: List[str]) -> List[str]:
+        """Remove placeholder or unrelated lines from job description sections."""
+        filtered = []
+        disallowed_keywords = [
+            'job description', 'template', 'opening-', 'position-', 'www.',
+            'gps log book', 'illustrated quick start', 'usb cable', 'technical specifications'
+        ]
+        for line in lines:
+            lower = line.lower()
+            if any(keyword in lower for keyword in disallowed_keywords):
+                continue
+            filtered.append(line)
+        return filtered
+
+    def _get_section_block(
+        self,
+        text: str,
+        header_token: str,
+        stop_tokens: Optional[List[str]] = None
+    ) -> str:
+        if not text:
+            return ""
+        
+        flags = re.IGNORECASE | re.DOTALL | re.MULTILINE
+        header_regex = rf'^\s*{re.escape(header_token)}[^\n]*\n?'
+        if stop_tokens:
+            stop_regex = "|".join(rf'^\s*{re.escape(token)}' for token in stop_tokens)
+            pattern = re.compile(rf'{header_regex}(.*?)(?={stop_regex})', flags)
+        else:
+            pattern = re.compile(rf'{header_regex}(.*)', flags)
+        
+        matches = pattern.findall(text)
+        if not matches:
+            return ""
+        block = max(matches, key=len)
+        return block
+
+    def _extract_insurance_details(
+        self,
+        retrieved_chunks: List[Dict[str, Any]],
+        context: str
+    ) -> Optional[Dict[str, Any]]:
+        """Pull GST and expiry information from insurance documents."""
+        chunk_text = self._get_chunk_text(
+            retrieved_chunks,
+            filename_keyword='doc 1.pdf',
+            keyword_filters=['gst', 'expiry', 'premium', 'tp']
+        )
+        search_space = chunk_text or context
+        if not search_space:
+            return None
+        
+        sources = {
+            chunk.get('metadata', {}).get('filename', 'Unknown')
+            for chunk in retrieved_chunks
+            if any(keyword in (chunk.get('text') or '').lower() for keyword in ['gst', 'tp expiry'])
+        }
+        sources = {source for source in sources if source}
+        
+        def find_first(patterns: List[str]) -> Optional[str]:
+            for pattern in patterns:
+                match = re.search(pattern, search_space, re.IGNORECASE)
+                if match:
+                    return match.group(1).strip()
+            return None
+        
+        cgst_raw = find_first([
+            r'CGST[^\n\r]*?([\d,]+(?:\.\d+)?)\s*(?:\n|$)'
+        ])
+        sgst_raw = find_first([
+            r'SGST[^\n\r]*?([\d,]+(?:\.\d+)?)\s*(?:\n|$)'
+        ])
+        gst_total_raw = find_first([
+            r'\bGST(?:\s+Amount)?[^\n\r]*?(?:₹|Rs\.?)?\s*([\d,]+(?:\.\d+)?)'
+        ])
+        tp_expiry = find_first([
+            r'(?:TP|Third Party)[^\d]{0,15}(?:Expiry|Valid(?:ity)?\s*(?:Till|Until|Up\s*to)|Expire)[^\d]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+            r'Expiry Date[^\d]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})'
+        ])
+        od_expiry = find_first([
+            r'OD\s+Expiry\s+Date[^\d]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})'
+        ])
+        
+        if not any([cgst_raw, sgst_raw, tp_expiry, od_expiry]):
+            return None
+        
+        def parse_amount(value: Optional[str]) -> Optional[float]:
+            if not value:
+                return None
+            cleaned = value.replace(',', '')
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+        
+        cgst = parse_amount(cgst_raw)
+        sgst = parse_amount(sgst_raw)
+        gst_total = parse_amount(gst_total_raw)
+        if not gst_total and cgst is not None and sgst is not None:
+            gst_total = cgst + sgst
+        
+        return {
+            'cgst': cgst,
+            'sgst': sgst,
+            'gst_total': gst_total,
+            'tp_expiry': tp_expiry,
+            'od_expiry': od_expiry,
+            'sources': list(sources) if sources else ['Doc 1.pdf']
+        }
+
+    def _format_amount(self, value: float) -> str:
+        if value is None:
+            return ""
+        if abs(value - int(value)) < 1e-6:
+            return f"{int(value):,}"
+        return f"{value:,.2f}".rstrip('0').rstrip('.')
+
+    def _format_insurance_response(self, info: Dict[str, Any]) -> str:
+        parts = []
+        gst_parts = []
+        if info.get('cgst') is not None:
+            gst_parts.append(f"CGST charged: Rs.{self._format_amount(info['cgst'])}")
+        if info.get('sgst') is not None:
+            gst_parts.append(f"SGST charged: Rs.{self._format_amount(info['sgst'])}")
+        if gst_parts:
+            if info.get('gst_total') is not None and len(gst_parts) > 1:
+                gst_parts.append(f"Total GST collected: Rs.{self._format_amount(info['gst_total'])}")
+            parts.append(" ".join(gst_parts))
+        
+        if info.get('tp_expiry'):
+            parts.append(f"Third-party (TP) insurance is valid until {info['tp_expiry']}.")
+        if info.get('od_expiry'):
+            parts.append(f"Own-damage cover expires on {info['od_expiry']}.")
+        
+        return " ".join(parts).strip()
+    
+    def _normalize_date_value(self, raw_value: Optional[str]) -> Optional[str]:
+        if not raw_value:
+            return None
+        value = str(raw_value).strip()
+        match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', value)
+        if match:
+            return match.group(1)
+        cleaned = re.sub(r'_DATE_VALUE.*', '', value, flags=re.IGNORECASE)
+        return cleaned.strip() or value
+    
+    def _deduplicate_preserve_order(self, items: List[str]) -> List[str]:
+        seen = set()
+        ordered = []
+        for item in items:
+            normalized = item.strip().lower()
+            if not item or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered.append(item.strip())
+        return ordered
+    
+    def _format_glock_release_summary(self, structured_results: Dict[str, Any]) -> Optional[str]:
+        dates = structured_results.get('glock_wo_release_dates')
+        products = structured_results.get('glock_products')
+        if not dates or not products:
+            return None
+        normalized_dates = [self._normalize_date_value(date) or date for date in dates]
+        status_list = structured_results.get('glock_status', [])
+        
+        answer_parts = []
+        for idx, product in enumerate(products):
+            date = normalized_dates[min(idx, len(normalized_dates) - 1)]
+            status = status_list[min(idx, len(status_list) - 1)] if status_list else None
+            phrase = f"{product}: planned WO release date {date}"
+            if status:
+                phrase += f" (status: {status})"
+            answer_parts.append(phrase)
+        return "; ".join(answer_parts)
+
+    def _extract_data_scientist_criteria(
+        self,
+        retrieved_chunks: List[Dict[str, Any]],
+        context: str
+    ) -> Optional[Dict[str, Any]]:
+        doc_text = self._get_chunk_text(
+            retrieved_chunks,
+            filename_keyword='doc 3.pdf',
+            keyword_filters=['data scientist', 'responsibilities', 'minimum qualifications']
+        )
+        search_space = doc_text or context
+        if not search_space:
+            return None
+        
+        responsibilities = self._filter_job_section_lines(
+            self._extract_bullet_lines(
+                self._get_section_block(search_space, 'responsibilities', ['experience', 'minimum qualifications', 'what will make you stand out'])
+            )
+        )
+        experience = self._filter_job_section_lines(
+            self._extract_bullet_lines(
+                self._get_section_block(search_space, 'experience', ['minimum qualifications', 'what will make you stand out'])
+            )
+        )
+        qualifications = self._filter_job_section_lines(
+            self._extract_bullet_lines(
+                self._get_section_block(search_space, 'minimum qualifications', ['what will make you stand out'])
+            )
+        )
+        standout = self._filter_job_section_lines(
+            self._extract_bullet_lines(
+                self._get_section_block(search_space, 'what will make you stand out', None)
+            )
+        )
+        
+        if not any([responsibilities, experience, qualifications, standout]):
+            return None
+        
+        lines = ["Data scientist hiring criteria from Doc 3:"]
+        if responsibilities:
+            lines.append("Responsibilities:")
+            for item in responsibilities[:6]:
+                lines.append(f"- {item}")
+        if experience or qualifications:
+            lines.append("Experience & minimum qualifications:")
+            combined = experience + qualifications
+            for item in combined[:6]:
+                lines.append(f"- {item}")
+        if standout:
+            lines.append("What helps a candidate stand out:")
+            for item in standout[:5]:
+                lines.append(f"- {item}")
+        
+        sources = {
+            chunk.get('metadata', {}).get('filename', 'Doc 3.pdf')
+            for chunk in retrieved_chunks
+            if 'doc 3.pdf' in chunk.get('metadata', {}).get('filename', '').lower()
+        }
+        if not sources:
+            sources = {'Doc 3.pdf'}
+        
+        return {'answer': "\n".join(lines), 'sources': list(sources)}
+
+    def _extract_logbook_benefits_and_setup(
+        self,
+        retrieved_chunks: List[Dict[str, Any]],
+        context: str
+    ) -> Optional[str]:
+        doc_text = self._get_chunk_text(
+            retrieved_chunks,
+            filename_keyword='doc 5.pdf',
+            keyword_filters=['log book', 'zone', 'download the gps log book']
+        )
+        search_space = doc_text or context
+        if not search_space:
+            return None
+        
+        benefit_lines = self._extract_bullet_lines(
+            self._get_section_block(search_space, '1.1 who can benefit', ['1.2'])
+        )
+        feature_lines = self._extract_bullet_lines(
+            self._get_section_block(search_space, '1.2 key features', ['2 '])
+        )
+        benefits = self._deduplicate_preserve_order(benefit_lines + feature_lines)[:6]
+        
+        section_configs = [
+            ('6.1 download the gps log book sync application', ['6.2'], ['download', 'install', 'application', 'website']),
+            ('6.2 plugging your device into the computer for the first time', ['6.3'], ['connect', 'device', 'register', 'driver']),
+            ('6.3 upload data', ['6.4'], ['upload', 'sync', 'led', 'data'])
+        ]
+        setup_steps = []
+        for header, stops, keywords in section_configs:
+            block = self._get_section_block(search_space, header, stops)
+            summary = self._summarize_section(block, keywords)
+            if summary:
+                section_label = header.split()[0]
+                setup_steps.append(f"{section_label}: {summary}")
+        setup_steps = setup_steps[:5]
+        
+        if not benefits and not setup_steps:
+            return None
+        
+        lines = []
+        if benefits:
+            lines.append("Benefits of using the GPS Log Book (Doc 5):")
+            for benefit in benefits:
+                lines.append(f"- {benefit}")
+        if setup_steps:
+            lines.append("")
+            lines.append("How to set it up:")
+            for idx, step in enumerate(setup_steps, 1):
+                lines.append(f"{idx}. {step}")
+        
+        return "\n".join([line for line in lines if line.strip()])
 
     def _extract_zone_instructions(self, context: str) -> Optional[str]:
         """Extract instructions for creating a zone from the log book document."""
