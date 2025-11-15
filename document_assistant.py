@@ -218,9 +218,16 @@ class DocumentProcessor:
                         name_data = df[df['mktg_specialistsmanagers'] == name]
                         content = f"Orders handled by {name}:\n"
                         content += f"Total orders: {len(name_data)}\n"
-                        content += f"Products: {', '.join(name_data['product_'].dropna().unique()[:5])}\n"
+                        products = name_data['product_'].dropna().astype(str).unique()[:5]
+                        content += f"Products: {', '.join(products)}\n"
                         if 'qty' in df.columns:
-                            content += f"Total quantity: {name_data['qty'].sum()}\n"
+                            qty_series = pd.to_numeric(name_data['qty'], errors='coerce')
+                            total_qty = qty_series.sum(skipna=True)
+                            if pd.isna(total_qty):
+                                total_qty = 0
+                            elif float(total_qty).is_integer():
+                                total_qty = int(total_qty)
+                            content += f"Total quantity: {total_qty}\n"
                         if 'status' in df.columns:
                             content += f"Status distribution: {name_data['status'].value_counts().to_dict()}\n"
                         
@@ -432,11 +439,11 @@ class ConversationalRAG:
         # Build comprehensive context from ALL search results
         context = ""
         source_files = set()
-        all_contexts = []
+        retrieved_chunks = []
         
         if search_results and search_results['documents']:
             for doc, metadata in zip(search_results['documents'][0], search_results['metadatas'][0]):
-                all_contexts.append(doc)
+                retrieved_chunks.append({'text': doc, 'metadata': metadata})
                 source_files.add(metadata.get('filename', 'Unknown'))
             
             # Prioritize full_document chunks for comprehensive answers
@@ -444,7 +451,9 @@ class ConversationalRAG:
             page_chunks = []
             other_chunks = []
             
-            for doc, metadata in zip(search_results['documents'][0], search_results['metadatas'][0]):
+            for chunk in retrieved_chunks:
+                metadata = chunk['metadata']
+                doc = chunk['text']
                 if metadata.get('chunk_type') == 'full_document':
                     full_docs.append(doc)
                 elif metadata.get('chunk_type') == 'page':
@@ -546,11 +555,25 @@ class ConversationalRAG:
                     # Fall back to comprehensive extraction
                     response['answer'] = self._extract_from_context(query, context)
         
-        elif any(word in query_lower for word in ['hiring', 'recruit', 'data scientist', 'roles']):
-            if context:
+        elif any(word in query_lower for word in ['hiring', 'recruit', 'data scientist', 'roles', 'position', 'opening']):
+            if retrieved_chunks:
+                hiring_roles = self._extract_hiring_roles(retrieved_chunks)
+                if hiring_roles:
+                    response['answer'] = self._format_hiring_response(hiring_roles)
+                    response['sources'] = sorted({role['source'] for role in hiring_roles})
+                elif context:
+                    response['answer'] = self._extract_from_context(query, context)
+            elif context:
                 response['answer'] = self._extract_from_context(query, context)
         
-        elif 'log book' in query_lower or 'zone' in query_lower:
+        elif 'create a zone' in query_lower or ('log book' in query_lower and 'zone' in query_lower):
+            if context:
+                zone_answer = self._extract_zone_instructions(context)
+                if zone_answer:
+                    response['answer'] = zone_answer
+                else:
+                    response['answer'] = self._extract_from_context(query, context)
+        elif 'log book' in query_lower:
             if context:
                 response['answer'] = self._extract_from_context(query, context)
         
@@ -566,13 +589,14 @@ class ConversationalRAG:
     
     def _extract_from_context(self, query: str, context: str) -> str:
         """Extract comprehensive answer from context with detailed information"""
+        llm_answer = ""
         if self.use_local_llm:
             try:
                 # Use MUCH larger context for complete answers
                 result = self.qa_pipeline(question=query, context=context[:12000])
-                return result['answer']
+                llm_answer = result.get('answer', '').strip()
             except:
-                pass
+                llm_answer = ""
         
         # Enhanced rule-based extraction for comprehensive answers
         query_lower = query.lower()
@@ -618,8 +642,24 @@ class ConversationalRAG:
         
         if answer_parts:
             # Create a comprehensive answer - NO TRUNCATION for complete information
-            answer = "\n\n".join(answer_parts)
-            return answer
+            combined_parts = []
+            if llm_answer:
+                combined_parts.append(llm_answer)
+            combined_parts.extend(answer_parts)
+            
+            deduped = []
+            seen = set()
+            for part in combined_parts:
+                cleaned = part.strip()
+                if not cleaned:
+                    continue
+                key = cleaned.lower()
+                if key not in seen:
+                    deduped.append(cleaned)
+                    seen.add(key)
+            
+            if deduped:
+                return "\n\n".join(deduped)
         
         # If no good paragraph matches, try sentence-level extraction
         sentences = re.split(r'[.!?]+', context)
@@ -635,13 +675,226 @@ class ConversationalRAG:
                 relevant_sentences.append(sentence_clean)
         
         if relevant_sentences:
-            # Return ALL relevant sentences for complete answer (no limit)
-            answer = ". ".join(relevant_sentences)
+            combined_parts = []
+            if llm_answer:
+                combined_parts.append(llm_answer)
+            combined_parts.extend(relevant_sentences)
+            answer = ". ".join(combined_parts)
             if not answer.endswith('.'):
                 answer += "."
             return answer
         
+        if llm_answer:
+            return llm_answer
+        
         return f"Based on the documents, I found relevant information but it may not directly answer your specific question. Please try rephrasing or asking more specifically about: {', '.join(list(query_keywords)[:5])}"
+    
+    def _extract_hiring_roles(self, retrieved_chunks: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """Extract hiring role information from retrieved document chunks."""
+        role_patterns = [
+            r'(?:role|position|designation|job title)\s*[:\-]\s*(.+)',
+            r'(?:hiring|looking for|recruiting)\s+(?:an?|the)?\s*([A-Za-z0-9 /&,\-]+)',
+            r'open(?:ing| position)s?\s*[:\-]\s*(.+)'
+        ]
+        job_terms = [
+            'developer', 'scientist', 'analyst', 'engineer', 'manager',
+            'consultant', 'architect', 'specialist', 'designer', 'lead',
+            'administrator', 'executive', 'associate', 'intern', 'expert',
+            'officer', 'technician', 'coordinator', 'director', 'owner',
+            'controller', 'supervisor', 'strategist', 'analyst', 'planner',
+            'bi developer', 'data engineer'
+        ]
+        job_base_terms = [term for term in job_terms if ' ' not in term]
+        context_keywords = [
+            'hiring', 'role', 'position', 'opening', 'vacancy',
+            'recruit', 'job', 'opportunity', 'career'
+        ]
+        role_prefix_terms = {
+            'senior', 'junior', 'lead', 'principal', 'data', 'power',
+            'bi', 'business', 'full', 'stack', 'cloud', 'machine',
+            'learning', 'software', 'java', 'python', 'powerbi',
+            'digital', 'analytics'
+        }
+        disallowed_starts = (
+            'experience', 'responsibil', 'requirement', 'skills',
+            'about', 'summary', 'profile', 'here', 'as a', 'we are'
+        )
+        
+        roles_map = {}
+        seen = set()
+        
+        for chunk in retrieved_chunks:
+            text = chunk['text']
+            metadata = chunk.get('metadata', {})
+            filename = metadata.get('filename', 'Unknown')
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            
+            for idx, line in enumerate(lines):
+                normalized = line.lower()
+                context_window = " ".join(lines[max(0, idx-2):idx+1]).lower()
+                
+                role_title = None
+                for pattern in role_patterns:
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match:
+                        role_title = match.group(1).strip(" -•:\t.;")
+                        break
+                
+                if not role_title:
+                    if 'job description' in normalized and any(term in normalized for term in job_terms):
+                        prefix = re.split(r'job description', line, flags=re.IGNORECASE)[0].strip()
+                        words = prefix.split()
+                        job_idx = None
+                        for idx in range(len(words) - 1, -1, -1):
+                            clean_word = re.sub(r'[^a-z0-9]', '', words[idx].lower())
+                            if clean_word in job_base_terms:
+                                job_idx = idx
+                                break
+                        if job_idx is not None:
+                            start_idx = job_idx
+                            while start_idx > 0:
+                                prev_clean = re.sub(r'[^a-z0-9]', '', words[start_idx - 1].lower())
+                                if prev_clean in role_prefix_terms:
+                                    start_idx -= 1
+                                else:
+                                    break
+                            candidate = " ".join(words[start_idx:job_idx + 1]).strip(" -•:\t.;")
+                            if candidate:
+                                role_title = candidate
+                
+                if not role_title:
+                    bullet_match = re.match(r'^[•\-\*\d\.\)\( ]+', line)
+                    bullet_line = re.sub(r'^[•\-\*\d\.\)\( ]+', '', line)
+                    if bullet_match:
+                        if any(term in bullet_line.lower() for term in job_terms):
+                            # Require contextual signal that this section is about hiring
+                            if any(keyword in context_window for keyword in context_keywords) or any(keyword in normalized for keyword in context_keywords):
+                                role_title = bullet_line.strip(" -•:\t.;")
+                
+                if not role_title and any(term in normalized for term in job_terms):
+                    stripped_line = line.strip()
+                    stripped_lower = stripped_line.lower()
+                    words = stripped_line.split()
+                    if len(stripped_line) <= 60 and len(words) <= 6 and not any(punct in stripped_line for punct in ['.', '!', '?', "'", '’']):
+                        if not stripped_lower.startswith(disallowed_starts):
+                            if re.match(r'^[A-Za-z0-9 /&\-\(\)]+$', stripped_line):
+                                words_clean = [re.sub(r'[^a-z0-9]', '', w.lower()) for w in stripped_line.split()]
+                                if any(word in job_base_terms for word in words_clean[-2:]):
+                                    role_title = stripped_line
+                
+                if not role_title:
+                    continue
+                
+                role_title = re.sub(r'\b(role|position|opening)\b', '', role_title, flags=re.IGNORECASE).strip(" -•:\t.;")
+                role_title = re.sub(r'^(?:for|the|a|an)\s+', '', role_title, flags=re.IGNORECASE)
+                role_title = re.sub(r'^(?:job description for|job desc for)\s+', '', role_title, flags=re.IGNORECASE)
+                role_title = re.sub(r'^(?:opening|openings|open)\s+(?:for\s+)?', '', role_title, flags=re.IGNORECASE)
+                role_title = re.sub(r'\s+', ' ', role_title).strip()
+                
+                normalized_role = role_title.lower()
+                if not any(term in normalized_role for term in job_terms):
+                    continue
+                
+                key = (role_title.lower(), filename.lower())
+                if key in seen:
+                    continue
+                
+                detail_lines = [line]
+                for extra_line in lines[idx+1:idx+4]:
+                    extra_lower = extra_line.lower()
+                    potential_new_role = (
+                        (re.search(r'(?:position|role|opening)\s*[:\-]', extra_lower) and any(term in extra_lower for term in job_terms))
+                        or (re.match(r'^[•\-\*\d]', extra_line.strip()) and any(term in extra_lower for term in job_terms))
+                    )
+                    if potential_new_role:
+                        break
+                    if any(trigger in extra_lower for trigger in ['responsibilit', 'requirement', 'skills', 'experience', 'about the role']):
+                        detail_lines.append(extra_line)
+                        break
+                    if len(extra_line.split()) < 4:
+                        continue
+                    detail_lines.append(extra_line)
+                    if len(" ".join(detail_lines)) > 500:
+                        break
+                
+                detail = " ".join(detail_lines).strip()
+                if len(detail) > 600:
+                    detail = detail[:600].rstrip() + "..."
+                
+                if key not in roles_map:
+                    roles_map[key] = {
+                        'role': role_title,
+                        'source': filename,
+                        'details': []
+                    }
+                if detail and detail not in roles_map[key]['details']:
+                    roles_map[key]['details'].append(detail)
+                seen.add(key)
+        
+        return list(roles_map.values())
+    
+    def _format_hiring_response(self, roles: List[Dict[str, str]]) -> str:
+        """Format hiring role information into a concise list of role names."""
+        if not roles:
+            return ""
+        
+        unique_roles = {}
+        for role in roles:
+            key = (role['role'], role['source'])
+            unique_roles[key] = role
+        
+        lines = ["Open roles identified across the documents:"]
+        for (role_name, source) in sorted(unique_roles.keys()):
+            lines.append(f"- {role_name} (source: {source})")
+        
+        return "\n".join(lines)
+
+    def _extract_zone_instructions(self, context: str) -> Optional[str]:
+        """Extract instructions for creating a zone from the log book document."""
+        lower_context = context.lower()
+        anchor = 'to create a new zone'
+        idx = lower_context.find(anchor)
+        
+        section_text = ""
+        if idx != -1:
+            end_idx = len(context)
+            for marker in ['7.3', '7.2.2', '8.']:
+                marker_pos = lower_context.find(marker.lower(), idx)
+                if marker_pos != -1:
+                    end_idx = min(end_idx, marker_pos)
+            start_idx = max(0, lower_context.rfind('7.2.1', 0, idx))
+            section_text = context[start_idx:end_idx]
+        else:
+            section_pattern = re.compile(
+                r'(7\.2\.1\s+Create\s+a\s+New\s+Zone.*?)(?:7\.2\.2|7\.3|8\.)',
+                re.IGNORECASE | re.DOTALL
+            )
+            match = section_pattern.search(context)
+            if match:
+                section_text = match.group(1)
+        
+        if not section_text:
+            return None
+        
+        cleaned = " ".join(section_text.split())
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', cleaned) if s.strip()]
+        heading = "7.2.1 Create a New Zone"
+        if sentences:
+            # Keep only the sentences that describe the procedure.
+            filtered = []
+            for sentence in sentences:
+                if sentence.lower().startswith('7.2.1'):
+                    continue
+                filtered.append(sentence)
+            if filtered:
+                concise = " ".join(filtered[:3])
+            else:
+                concise = " ".join(sentences[:3])
+        else:
+            concise = cleaned
+        
+        summary = f"{heading} — {concise}"
+        return summary.strip()
 
 def main():
     """Main function to run the conversational document assistant"""
